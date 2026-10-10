@@ -27,6 +27,21 @@ public class Tile : MonoBehaviour
     public bool locked { get; set; }
 
     /// <summary>
+    /// 이 타일이 합쳐질 때 타이머 시간을 늘려주는 특수 타일인지 여부입니다.
+    /// </summary>
+    public bool isTimerBonus { get; private set; }
+
+    [Header("특수 타일 (타이머 보너스) 비주얼 설정")]
+    [Tooltip("특수 타일일 때 적용할 배경 색상 (황금빛 골드/오렌지)")]
+    [SerializeField] private Color bonusBackgroundColor = new Color(1f, 0.82f, 0.35f, 1f);
+
+    [Tooltip("특수 타일일 때 적용할 텍스트 색상 (선택 사항, 진한 갈색 텍스트)")]
+    [SerializeField] private Color bonusTextColor = new Color(0.35f, 0.22f, 0.05f, 1f);
+
+    [Tooltip("특수 타일일 때 숫자 뒤에 붙는 기호 (예: +)")]
+    [SerializeField] private string bonusTextSuffix = "";
+
+    /// <summary>
     /// 타일의 배경 색상을 칠하기 위한 UI Image 컴포넌트입니다.
     /// </summary>
     private Image background;
@@ -41,10 +56,16 @@ public class Tile : MonoBehaviour
     /// </summary>
     private void Awake()
     {
-        // 자신의 Image 컴포넌트를 가져옵니다.
-        background = GetComponent<Image>();
-        // 자식 오브젝트에 있는 TextMeshProUGUI 컴포넌트를 가져옵니다.
-        text = GetComponentInChildren<TextMeshProUGUI>();
+        EnsureComponents();
+    }
+
+    /// <summary>
+    /// UI 컴포넌트 참조가 없으면 가져옵니다.
+    /// </summary>
+    private void EnsureComponents()
+    {
+        if (background == null) background = GetComponent<Image>();
+        if (text == null) text = GetComponentInChildren<TextMeshProUGUI>();
     }
 
     /// <summary>
@@ -55,11 +76,45 @@ public class Tile : MonoBehaviour
     public void SetState(TileState state)
     {
         this.state = state;
+        UpdateVisual();
+    }
 
-        // ScriptableObject에 정의된 색상과 숫자를 UI에 반영합니다.
-        background.color = state.backgroundColor;
-        text.color = state.textColor;
-        text.text = state.number.ToString();
+    /// <summary>
+    /// 특수 타일(타이머 보너스) 여부를 설정하고 UI를 갱신합니다.
+    /// </summary>
+    /// <param name="isBonus">특수 타일 여부</param>
+    public void SetTimerBonus(bool isBonus)
+    {
+        this.isTimerBonus = isBonus;
+        UpdateVisual();
+    }
+
+    /// <summary>
+    /// 현재 상태와 특수 타일 여부에 따라 UI(배경색, 텍스트 색상, 텍스트 내용)를 갱신합니다.
+    /// </summary>
+    public void UpdateVisual()
+    {
+        if (state == null) return;
+        EnsureComponents();
+
+        if (isTimerBonus)
+        {
+            if (background != null) background.color = bonusBackgroundColor;
+            if (text != null)
+            {
+                text.color = bonusTextColor;
+                text.text = state.number + bonusTextSuffix;
+            }
+        }
+        else
+        {
+            if (background != null) background.color = state.backgroundColor;
+            if (text != null)
+            {
+                text.color = state.textColor;
+                text.text = state.number.ToString();
+            }
+        }
     }
 
     /// <summary>
@@ -98,6 +153,18 @@ public class Tile : MonoBehaviour
         this.cell.tile = this;
 
         // 목표 위치로 부드럽게 미끄러지듯 이동하는 코루틴을 시작합니다 (merging = false).
+        StartCoroutine(Animate(cell.transform.position, false));
+    }
+
+    /// <summary>
+    /// 스왑 어빌리티 사용 시 두 타일 간의 위치를 교환할 때 호출됩니다.
+    /// 기존 셀의 tile 참조를 null로 초기화하지 않고 목표 셀과 연결한 뒤 부드럽게 이동합니다.
+    /// </summary>
+    /// <param name="cell">교환될 목표 칸</param>
+    public void MoveToForSwap(TileCell cell)
+    {
+        this.cell = cell;
+        this.cell.tile = this;
         StartCoroutine(Animate(cell.transform.position, false));
     }
 

@@ -27,6 +27,21 @@ public class GameManager : MonoBehaviour
     [Tooltip("최고 점수를 표시하는 텍스트 UI")]
     [SerializeField] private TextMeshProUGUI hiscoreText;
 
+    [Tooltip("Undo 어빌리티 컴포넌트")]
+    [SerializeField] private UndoAbility undoAbility;
+
+    [Tooltip("Swap 어빌리티 컴포넌트")]
+    [SerializeField] private TileSwapAbility swapAbility;
+
+    [Tooltip("Tp 어빌리티 컴포넌트")]
+    [SerializeField] private TileTpAbility tpAbility;
+
+    [Tooltip("Bomb 어빌리티 컴포넌트")]
+    [SerializeField] private BombAbility bombAbility;
+
+    [Tooltip("Erase 어빌리티 컴포넌트")]
+    [SerializeField] private EraseAbility eraseAbility;
+
     /// <summary>
     /// 현재 게임의 획득 점수입니다.
     /// </summary>
@@ -82,6 +97,46 @@ public class GameManager : MonoBehaviour
         board.CreateTile();
         board.CreateTile();
         board.enabled = true;
+
+        //타이머를 초기화합니다.
+        if (Timer.Instance != null) {
+            Timer.Instance.GameStart();
+        }
+
+        // 이전 보드 기록을 초기화합니다.
+        if (BoardHistoryManager.Instance != null) {
+            BoardHistoryManager.Instance.ClearHistory();
+        }
+
+        // 되돌리기 횟수를 초기화합니다.
+        if (undoAbility != null) {
+            undoAbility.ResetUndoCount();
+        }
+
+        // 스왑 어빌리티 횟수를 초기화합니다.
+        if (swapAbility != null) {
+            swapAbility.ResetSwapCount();
+        }
+
+        // 텔레포트 어빌리티 횟수를 초기화합니다.
+        if (tpAbility != null) {
+            tpAbility.ResetTpCount();
+        }
+
+        // 폭탄 어빌리티 횟수를 초기화합니다.
+        if (bombAbility != null) {
+            bombAbility.ResetBombCount();
+        }
+
+        // 지우기 어빌리티 횟수를 초기화합니다.
+        if (eraseAbility != null) {
+            eraseAbility.ResetEraseCount();
+        }
+
+        // 배경음악(BGM)을 무작위로 재생합니다.
+        if (AudioManager.Instance != null) {
+            AudioManager.Instance.PlayRandomBGM();
+        }
     }
 
     /// <summary>
@@ -96,6 +151,16 @@ public class GameManager : MonoBehaviour
 
         // 게임 오버 창이 서서히 나타나도록 페이드 인 애니메이션을 실행합니다 (1초 지연 후 0.5초 동안 서서히 등장).
         StartCoroutine(Fade(gameOver, 1f, 1f));
+
+        // 타이머 정지
+        if (Timer.Instance != null) {
+            Timer.Instance.StopTimer();
+        }
+
+        // 게임 오버 시 BGM 정지
+        if (AudioManager.Instance != null) {
+            AudioManager.Instance.StopBGM();
+        }
     }
 
     /// <summary>
@@ -138,7 +203,7 @@ public class GameManager : MonoBehaviour
     /// 점수를 갱신하고 점수 UI 텍스트를 업데이트하며, 최고 점수 갱신 여부를 체크합니다.
     /// </summary>
     /// <param name="score">설정할 새 점수</param>
-    private void SetScore(int score)
+    public void SetScore(int score)
     {
         this.score = score;
         scoreText.text = score.ToString();
