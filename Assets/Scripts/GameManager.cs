@@ -42,6 +42,9 @@ public class GameManager : MonoBehaviour
     [Tooltip("Erase 어빌리티 컴포넌트")]
     [SerializeField] private EraseAbility eraseAbility;
 
+    [Tooltip("Rotate 어빌리티 컴포넌트")]
+    [SerializeField] private RotateAbility rotateAbility;
+
     /// <summary>
     /// 현재 게임의 획득 점수입니다.
     /// </summary>
@@ -51,15 +54,22 @@ public class GameManager : MonoBehaviour
     /// 싱글톤 패턴 초기화: 씬에 단 하나의 GameManager만 존재하도록 보장합니다.
     /// </summary>
     private void Awake()
-    {
-        if (Instance != null) {
-            // 이미 다른 GameManager가 존재한다면 중복된 자신을 즉시 제거합니다.
-            DestroyImmediate(gameObject);
-        } else {
-            // 최초 생성된 인스턴스를 static 변수에 보관합니다.
-            Instance = this;
-        }
+{
+    // 모바일 등에서 60 FPS 보장 (vSync가 켜져 있으면 targetFrameRate가 무시될 수 있으므로 vSyncCount = 0 설정)
+    QualitySettings.vSyncCount = 0;
+    Application.targetFrameRate = 60; // 필요시 120
+
+    // 싱글톤 패턴 초기화
+    if (Instance != null) {
+        DestroyImmediate(gameObject);
+    } else {
+        Instance = this;
     }
+
+    if (rotateAbility == null) {
+        rotateAbility = FindFirstObjectByType<RotateAbility>();
+    }
+}
 
     /// <summary>
     /// 게임오브젝트가 파괴될 때 싱글톤 참조를 안전하게 비워줍니다.
@@ -131,6 +141,11 @@ public class GameManager : MonoBehaviour
         // 지우기 어빌리티 횟수를 초기화합니다.
         if (eraseAbility != null) {
             eraseAbility.ResetEraseCount();
+        }
+
+        // 회전 어빌리티 횟수를 초기화합니다.
+        if (rotateAbility != null) {
+            rotateAbility.ResetRotateCount();
         }
 
         // 배경음악(BGM)을 무작위로 재생합니다.

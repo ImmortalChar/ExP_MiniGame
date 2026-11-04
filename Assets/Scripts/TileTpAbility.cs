@@ -21,12 +21,32 @@ public class TileTpAbility : MonoBehaviour
     [Tooltip("현재 남은 텔레포트 사용 횟수 (기본값: 3)")]
     [SerializeField] private int tpCount = 3;
 
+    [Header("하이라이트 효과 설정")]
+    [Tooltip("텔레포트 발동 시 타일이 확대되는 하이라이트 배율")]
+    [SerializeField] private float highlightScaleMultiplier = 1.25f;
+
+    [Tooltip("텔레포트 발동 하이라이트 연출 지속 시간 (초)")]
+    [SerializeField] private float highlightDuration = 0.2f;
+
     [Header("UI 컴포넌트")]
     [Tooltip("남은 텔레포트 횟수를 표시할 TextMeshPro UI (선택 사항)")]
     [SerializeField] private TextMeshProUGUI tpCountText;
 
     [Tooltip("Tp 버튼 컴포넌트 (비어있으면 현재 오브젝트에서 자동 탐색)")]
     [SerializeField] private Button tpButton;
+
+    [Header("버튼 하이라이트 UI 설정")]
+    [Tooltip("어빌리티 활성화 시 버튼에 적용할 강조 색상 (기본값: 밝은 황금빛)")]
+    [SerializeField] private Color buttonActiveColor = new Color(1f, 0.88f, 0.35f, 1f);
+
+    [Tooltip("어빌리티 활성화 시 버튼 확대 배율 (기본값: 1.12배)")]
+    [SerializeField] private float buttonActiveScale = 1.12f;
+
+    [Tooltip("어빌리티 활성화 시 버튼이 부드럽게 숨쉬듯 펄스 애니메이션을 재생할지 여부")]
+    [SerializeField] private bool usePulseAnimation = true;
+
+    [Tooltip("어빌리티 활성화 시 외곽선(Outline) 강조를 표시할지 여부")]
+    [SerializeField] private bool useOutlineHighlight = true;
 
     [Header("보드 참조")]
     [Tooltip("TileBoard 컴포넌트 참조 (비어있으면 씬에서 자동 탐색)")]
@@ -36,8 +56,14 @@ public class TileTpAbility : MonoBehaviour
     private bool isTpMode = false;
 
     private TileCell firstSelectedCell = null;
-    private Vector3 originalFirstTileScale = Vector3.one;
     private bool isListenersRegistered = false;
+
+    private Vector3 originalButtonScale = Vector3.one;
+    private Color originalButtonColor = Color.white;
+    private ColorBlock originalColorBlock;
+    private Image buttonImage;
+    private Outline buttonOutline;
+    private Coroutine buttonPulseCoroutine;
 
     private void Awake()
     {
@@ -52,6 +78,8 @@ public class TileTpAbility : MonoBehaviour
         {
             tpButton = GetComponent<Button>();
         }
+
+        InitButtonHighlight();
     }
 
     private void Start()
@@ -186,6 +214,12 @@ public class TileTpAbility : MonoBehaviour
             erase.CancelEraseMode();
         }
 
+        RotateAbility rotate = FindFirstObjectByType<RotateAbility>();
+        if (rotate != null && rotate.IsRotateMode)
+        {
+            rotate.CancelRotateMode();
+        }
+
         // 리스너가 아직 등록되지 않았었다면 즉시 등록
         if (!isListenersRegistered)
         {
@@ -197,6 +231,7 @@ public class TileTpAbility : MonoBehaviour
 
         // 3. TP 모드 활성화
         isTpMode = true;
+        SetButtonHighlight(true);
         firstSelectedCell = null;
 
         // 타일 선택 도중 보드가 스와이프로 밀리지 않도록 보드 입력 잠시 비활성화
@@ -267,16 +302,29 @@ public class TileTpAbility : MonoBehaviour
 
     /// <summary>
     /// 선택한 타일을 비어있는 목표 셀로 이동시키고 후속 처리를 진행합니다.
+    /// 이동 완료 후 어빌리티가 발동된 타일 자체에 하이라이트 효과(확대 팝 연출)를 적용합니다.
     /// </summary>
     private void ExecuteTp(TileCell fromCell, TileCell toCell)
+    {
+        StartCoroutine(ExecuteTpRoutine(fromCell, toCell));
+    }
+
+    /// <summary>
+    /// 텔레포트 어빌리티 발동 코루틴: 타일 이동 완료 후 발동 타일 하이라이트 재생 및 후속 처리를 진행합니다.
+    /// </summary>
+    private IEnumerator ExecuteTpRoutine(TileCell fromCell, TileCell toCell)
     {
         Tile tile = fromCell.tile;
 
         if (tile == null || !toCell.Empty)
         {
             CancelTpMode();
-            return;
+            yield break;
         }
+
+        // TP 실행 중 중복 터치 방지
+        firstSelectedCell = null;
+        isTpMode = false;
 
         // 1. 직전 상태 저장 (되돌리기 Undo 기능과의 연동)
         if (BoardHistoryManager.Instance != null)
@@ -284,8 +332,17 @@ public class TileTpAbility : MonoBehaviour
             BoardHistoryManager.Instance.SaveCurrentState();
         }
 
-        // 2. 타일을 목표 빈 칸으로 이동 (Tile의 MoveTo는 기존 칸 연결 해제, 새 칸 연결 및 이동 애니메이션을 수행)
+        // 2. 타일을 목표 빈 칸으로 이동 (Tile의 MoveTo는 0.15초 소요)
         tile.MoveTo(toCell);
+
+        // 이동 애니메이션 완료 대기
+        yield return new WaitForSeconds(0.15f);
+
+        // [핵심] 어빌리티 발동 타일 자체에 하이라이트 팝 효과 적용!
+        if (tile != null)
+        {
+            tile.PlayHighlightEffect(highlightScaleMultiplier, highlightDuration);
+        }
 
         // 3. 사용 횟수 1 차감 및 UI 업데이트
         tpCount--;
@@ -293,9 +350,8 @@ public class TileTpAbility : MonoBehaviour
 
         Debug.Log($"[TileTpAbility] 타일 텔레포트 완료! ({fromCell.coordinates} -> {toCell.coordinates}) 남은 횟수: {tpCount}/{maxTpCount}");
 
-        // 4. TP 모드 종료 및 보드 조작 재개
-        firstSelectedCell = null;
-        isTpMode = false;
+        // 4. TP 모드 종료 및 버튼 하이라이트 해제
+        SetButtonHighlight(false);
 
         if (board != null)
         {
@@ -334,6 +390,7 @@ public class TileTpAbility : MonoBehaviour
 
         firstSelectedCell = null;
         isTpMode = false;
+        SetButtonHighlight(false);
 
         // 보드 조작 다시 활성화
         if (board != null)
@@ -343,21 +400,121 @@ public class TileTpAbility : MonoBehaviour
     }
 
     /// <summary>
+    /// 버튼 하이라이트 관련 원본 값 초기화 및 아웃라인 설정을 수행합니다.
+    /// </summary>
+    private void InitButtonHighlight()
+    {
+        if (tpButton != null)
+        {
+            originalButtonScale = tpButton.transform.localScale;
+            originalColorBlock = tpButton.colors;
+
+            buttonImage = tpButton.GetComponent<Image>();
+            if (buttonImage != null)
+            {
+                originalButtonColor = buttonImage.color;
+            }
+
+            if (useOutlineHighlight)
+            {
+                buttonOutline = tpButton.GetComponent<Outline>();
+                if (buttonOutline == null)
+                {
+                    buttonOutline = tpButton.gameObject.AddComponent<Outline>();
+                }
+                buttonOutline.effectColor = new Color(1f, 0.9f, 0.2f, 0.9f);
+                buttonOutline.effectDistance = new Vector2(3f, -3f);
+                buttonOutline.enabled = false;
+            }
+        }
+    }
+
+    /// <summary>
+    /// 텔레포트 버튼의 활성화/비활성화 하이라이트 상태를 적용합니다.
+    /// </summary>
+    /// <param name="isActive">활성화 여부</param>
+    public void SetButtonHighlight(bool isActive)
+    {
+        if (tpButton == null) return;
+
+        if (buttonPulseCoroutine != null)
+        {
+            StopCoroutine(buttonPulseCoroutine);
+            buttonPulseCoroutine = null;
+        }
+
+        if (isActive)
+        {
+            if (usePulseAnimation && gameObject.activeInHierarchy)
+            {
+                buttonPulseCoroutine = StartCoroutine(ButtonPulseRoutine());
+            }
+            else
+            {
+                tpButton.transform.localScale = originalButtonScale * buttonActiveScale;
+            }
+
+            if (buttonImage != null)
+            {
+                buttonImage.color = buttonActiveColor;
+            }
+
+            ColorBlock cb = tpButton.colors;
+            cb.normalColor = buttonActiveColor;
+            cb.selectedColor = buttonActiveColor;
+            tpButton.colors = cb;
+
+            if (buttonOutline != null)
+            {
+                buttonOutline.enabled = true;
+            }
+        }
+        else
+        {
+            tpButton.transform.localScale = originalButtonScale;
+
+            if (buttonImage != null)
+            {
+                buttonImage.color = originalButtonColor;
+            }
+
+            tpButton.colors = originalColorBlock;
+
+            if (buttonOutline != null)
+            {
+                buttonOutline.enabled = false;
+            }
+        }
+    }
+
+    /// <summary>
+    /// 활성화 중일 때 버튼이 숨쉬듯 부드럽게 펄스(크기 변화)하는 코루틴입니다.
+    /// </summary>
+    private IEnumerator ButtonPulseRoutine()
+    {
+        float minScale = buttonActiveScale;
+        float maxScale = buttonActiveScale * 1.08f;
+        float speed = 4f;
+
+        while (true)
+        {
+            float t = (Mathf.Sin(Time.time * speed) + 1f) * 0.5f;
+            float currentScale = Mathf.Lerp(minScale, maxScale, t);
+            if (tpButton != null)
+            {
+                tpButton.transform.localScale = originalButtonScale * currentScale;
+            }
+            yield return null;
+        }
+    }
+
+    /// <summary>
     /// 선택된 타일을 시각적으로 강조 표시합니다 (약간 확대/복원).
     /// </summary>
     private void HighlightTile(Tile tile, bool isHighlighted)
     {
         if (tile == null) return;
-
-        if (isHighlighted)
-        {
-            originalFirstTileScale = tile.transform.localScale;
-            tile.transform.localScale = originalFirstTileScale * 1.15f;
-        }
-        else
-        {
-            tile.transform.localScale = originalFirstTileScale;
-        }
+        tile.SetHighlight(isHighlighted, 1.15f);
     }
 
     /// <summary>

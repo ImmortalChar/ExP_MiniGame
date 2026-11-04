@@ -20,12 +20,32 @@ public class TileSwapAbility : MonoBehaviour
     [Tooltip("현재 남은 스왑 사용 횟수 (기본값: 3)")]
     [SerializeField] private int swapCount = 3;
 
+    [Header("하이라이트 효과 설정")]
+    [Tooltip("스왑 발동 시 타일이 확대되는 하이라이트 배율")]
+    [SerializeField] private float highlightScaleMultiplier = 1.25f;
+
+    [Tooltip("스왑 발동 하이라이트 연출 지속 시간 (초)")]
+    [SerializeField] private float highlightDuration = 0.2f;
+
     [Header("UI 컴포넌트")]
     [Tooltip("남은 스왑 횟수를 표시할 TextMeshPro UI (선택 사항)")]
     [SerializeField] private TextMeshProUGUI swapCountText;
 
     [Tooltip("Swap 버튼 컴포넌트 (비어있으면 현재 오브젝트에서 자동 탐색)")]
     [SerializeField] private Button swapButton;
+
+    [Header("버튼 하이라이트 UI 설정")]
+    [Tooltip("어빌리티 활성화 시 버튼에 적용할 강조 색상 (기본값: 밝은 황금빛)")]
+    [SerializeField] private Color buttonActiveColor = new Color(1f, 0.88f, 0.35f, 1f);
+
+    [Tooltip("어빌리티 활성화 시 버튼 확대 배율 (기본값: 1.12배)")]
+    [SerializeField] private float buttonActiveScale = 1.12f;
+
+    [Tooltip("어빌리티 활성화 시 버튼이 부드럽게 숨쉬듯 펄스 애니메이션을 재생할지 여부")]
+    [SerializeField] private bool usePulseAnimation = true;
+
+    [Tooltip("어빌리티 활성화 시 외곽선(Outline) 강조를 표시할지 여부")]
+    [SerializeField] private bool useOutlineHighlight = true;
 
     [Header("보드 참조")]
     [Tooltip("TileBoard 컴포넌트 참조 (비어있으면 씬에서 자동 탐색)")]
@@ -35,8 +55,14 @@ public class TileSwapAbility : MonoBehaviour
     private bool isSwapMode = false;
 
     private TileCell firstSelectedCell = null;
-    private Vector3 originalFirstTileScale = Vector3.one;
     private bool isListenersRegistered = false;
+
+    private Vector3 originalButtonScale = Vector3.one;
+    private Color originalButtonColor = Color.white;
+    private ColorBlock originalColorBlock;
+    private Image buttonImage;
+    private Outline buttonOutline;
+    private Coroutine buttonPulseCoroutine;
 
     private void Awake()
     {
@@ -51,6 +77,8 @@ public class TileSwapAbility : MonoBehaviour
         {
             swapButton = GetComponent<Button>();
         }
+
+        InitButtonHighlight();
     }
 
     private void Start()
@@ -185,6 +213,12 @@ public class TileSwapAbility : MonoBehaviour
             erase.CancelEraseMode();
         }
 
+        RotateAbility rotate = FindFirstObjectByType<RotateAbility>();
+        if (rotate != null && rotate.IsRotateMode)
+        {
+            rotate.CancelRotateMode();
+        }
+
         // 리스너가 아직 등록되지 않았었다면 즉시 등록
         if (!isListenersRegistered)
         {
@@ -196,6 +230,7 @@ public class TileSwapAbility : MonoBehaviour
 
         // 3. 스왑 모드 활성화
         isSwapMode = true;
+        SetButtonHighlight(true);
         firstSelectedCell = null;
 
         // 타일 선택 도중 보드가 스와이프로 밀리지 않도록 보드 입력 잠시 비활성화
@@ -258,8 +293,17 @@ public class TileSwapAbility : MonoBehaviour
 
     /// <summary>
     /// 두 셀에 위치한 타일의 위치를 실제로 맞바꾸고 후속 처리를 진행합니다.
+    /// 스왑 완료 후 어빌리티가 발동된 두 타일 자체에 하이라이트 효과(확대 팝 연출)를 적용합니다.
     /// </summary>
     private void ExecuteSwap(TileCell cellA, TileCell cellB)
+    {
+        StartCoroutine(ExecuteSwapRoutine(cellA, cellB));
+    }
+
+    /// <summary>
+    /// 스왑 어빌리티 발동 코루틴: 위치 이동 완료 후 발동 타일 하이라이트 재생 및 후속 처리를 진행합니다.
+    /// </summary>
+    private IEnumerator ExecuteSwapRoutine(TileCell cellA, TileCell cellB)
     {
         Tile tileA = cellA.tile;
         Tile tileB = cellB.tile;
@@ -267,8 +311,12 @@ public class TileSwapAbility : MonoBehaviour
         if (tileA == null || tileB == null)
         {
             CancelSwapMode();
-            return;
+            yield break;
         }
+
+        // 스왑 실행 중 중복 터치 방지
+        firstSelectedCell = null;
+        isSwapMode = false;
 
         // 1. 직전 상태 저장 (되돌리기 Undo 기능과의 연동)
         if (BoardHistoryManager.Instance != null)
@@ -276,9 +324,16 @@ public class TileSwapAbility : MonoBehaviour
             BoardHistoryManager.Instance.SaveCurrentState();
         }
 
-        // 2. 두 타일 간의 위치 스왑 애니메이션 및 셀 연결 갱신
+        // 2. 두 타일 간의 위치 스왑 애니메이션 및 셀 연결 갱신 (0.15초 소요)
         tileA.MoveToForSwap(cellB);
         tileB.MoveToForSwap(cellA);
+
+        // 스왑 이동 애니메이션 완료 대기
+        yield return new WaitForSeconds(0.15f);
+
+        // [핵심] 어빌리티 발동 타일 자체에 하이라이트 팝 효과 적용!
+        if (tileA != null) tileA.PlayHighlightEffect(highlightScaleMultiplier, highlightDuration);
+        if (tileB != null) tileB.PlayHighlightEffect(highlightScaleMultiplier, highlightDuration);
 
         // 3. 사용 횟수 1 차감 및 UI 업데이트
         swapCount--;
@@ -286,9 +341,8 @@ public class TileSwapAbility : MonoBehaviour
 
         Debug.Log($"[TileSwapAbility] 타일 스왑 완료! 남은 횟수: {swapCount}/{maxSwapCount}");
 
-        // 4. 스왑 모드 종료 및 보드 조작 재개
-        firstSelectedCell = null;
-        isSwapMode = false;
+        // 4. 스왑 모드 종료 및 버튼 하이라이트 해제
+        SetButtonHighlight(false);
 
         if (board != null)
         {
@@ -327,6 +381,7 @@ public class TileSwapAbility : MonoBehaviour
 
         firstSelectedCell = null;
         isSwapMode = false;
+        SetButtonHighlight(false);
 
         // 보드 조작 다시 활성화
         if (board != null)
@@ -336,21 +391,121 @@ public class TileSwapAbility : MonoBehaviour
     }
 
     /// <summary>
+    /// 버튼 하이라이트 관련 원본 값 초기화 및 아웃라인 설정을 수행합니다.
+    /// </summary>
+    private void InitButtonHighlight()
+    {
+        if (swapButton != null)
+        {
+            originalButtonScale = swapButton.transform.localScale;
+            originalColorBlock = swapButton.colors;
+
+            buttonImage = swapButton.GetComponent<Image>();
+            if (buttonImage != null)
+            {
+                originalButtonColor = buttonImage.color;
+            }
+
+            if (useOutlineHighlight)
+            {
+                buttonOutline = swapButton.GetComponent<Outline>();
+                if (buttonOutline == null)
+                {
+                    buttonOutline = swapButton.gameObject.AddComponent<Outline>();
+                }
+                buttonOutline.effectColor = new Color(1f, 0.9f, 0.2f, 0.9f);
+                buttonOutline.effectDistance = new Vector2(3f, -3f);
+                buttonOutline.enabled = false;
+            }
+        }
+    }
+
+    /// <summary>
+    /// 스왑 버튼의 활성화/비활성화 하이라이트 상태를 적용합니다.
+    /// </summary>
+    /// <param name="isActive">활성화 여부</param>
+    public void SetButtonHighlight(bool isActive)
+    {
+        if (swapButton == null) return;
+
+        if (buttonPulseCoroutine != null)
+        {
+            StopCoroutine(buttonPulseCoroutine);
+            buttonPulseCoroutine = null;
+        }
+
+        if (isActive)
+        {
+            if (usePulseAnimation && gameObject.activeInHierarchy)
+            {
+                buttonPulseCoroutine = StartCoroutine(ButtonPulseRoutine());
+            }
+            else
+            {
+                swapButton.transform.localScale = originalButtonScale * buttonActiveScale;
+            }
+
+            if (buttonImage != null)
+            {
+                buttonImage.color = buttonActiveColor;
+            }
+
+            ColorBlock cb = swapButton.colors;
+            cb.normalColor = buttonActiveColor;
+            cb.selectedColor = buttonActiveColor;
+            swapButton.colors = cb;
+
+            if (buttonOutline != null)
+            {
+                buttonOutline.enabled = true;
+            }
+        }
+        else
+        {
+            swapButton.transform.localScale = originalButtonScale;
+
+            if (buttonImage != null)
+            {
+                buttonImage.color = originalButtonColor;
+            }
+
+            swapButton.colors = originalColorBlock;
+
+            if (buttonOutline != null)
+            {
+                buttonOutline.enabled = false;
+            }
+        }
+    }
+
+    /// <summary>
+    /// 활성화 중일 때 버튼이 숨쉬듯 부드럽게 펄스(크기 변화)하는 코루틴입니다.
+    /// </summary>
+    private IEnumerator ButtonPulseRoutine()
+    {
+        float minScale = buttonActiveScale;
+        float maxScale = buttonActiveScale * 1.08f;
+        float speed = 4f;
+
+        while (true)
+        {
+            float t = (Mathf.Sin(Time.time * speed) + 1f) * 0.5f;
+            float currentScale = Mathf.Lerp(minScale, maxScale, t);
+            if (swapButton != null)
+            {
+                swapButton.transform.localScale = originalButtonScale * currentScale;
+            }
+            yield return null;
+        }
+    }
+
+    /// <summary>
     /// 선택된 타일을 시각적으로 강조 표시합니다 (약간 확대/복원).
     /// </summary>
     private void HighlightTile(Tile tile, bool isHighlighted)
     {
         if (tile == null) return;
-
-        if (isHighlighted)
-        {
-            originalFirstTileScale = tile.transform.localScale;
-            tile.transform.localScale = originalFirstTileScale * 1.15f;
-        }
-        else
-        {
-            tile.transform.localScale = originalFirstTileScale;
-        }
+        tile.SetHighlight(isHighlighted, 1.15f);
     }
 
     /// <summary>

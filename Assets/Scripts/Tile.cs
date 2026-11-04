@@ -51,11 +51,20 @@ public class Tile : MonoBehaviour
     /// </summary>
     private TextMeshProUGUI text;
 
+    private Coroutine highlightCoroutine;
+    private Vector3 baseScale = Vector3.one;
+
+    /// <summary>
+    /// 타일의 기본(기준) 스케일 크기입니다.
+    /// </summary>
+    public Vector3 BaseScale => baseScale;
+
     /// <summary>
     /// 오브젝트가 생성될 때 UI 컴포넌트 참조들을 초기화합니다.
     /// </summary>
     private void Awake()
     {
+        baseScale = transform.localScale;
         EnsureComponents();
     }
 
@@ -196,7 +205,7 @@ public class Tile : MonoBehaviour
     private IEnumerator Animate(Vector3 to, bool merging)
     {
         float elapsed = 0f;      // 이동 경과 시간
-        float duration = 0.1f;    // 전체 이동에 걸리는 시간 (0.1초 동안 빠르게 슬라이드)
+        float duration = 0.15f;    // 전체 이동에 걸리는 시간 (0.1초 동안 빠르게 슬라이드)
 
         Vector3 from = transform.position; // 출발 위치
 
@@ -216,5 +225,71 @@ public class Tile : MonoBehaviour
         if (merging) {
             Destroy(gameObject);
         }
+    }
+
+    /// <summary>
+    /// 타일을 지속적으로 확대/원복시키는 선택 하이라이트 상태를 설정합니다.
+    /// </summary>
+    /// <param name="isHighlighted">강조 여부</param>
+    /// <param name="scaleMultiplier">확대 배율 (기본값: 1.15배)</param>
+    public void SetHighlight(bool isHighlighted, float scaleMultiplier = 1.15f)
+    {
+        if (highlightCoroutine != null)
+        {
+            StopCoroutine(highlightCoroutine);
+            highlightCoroutine = null;
+        }
+
+        transform.localScale = isHighlighted ? baseScale * scaleMultiplier : baseScale;
+    }
+
+    /// <summary>
+    /// 어빌리티 발동 시 타일이 돋보이도록 순간적으로 팝(Pop, 확대 후 복귀)되는 하이라이트 애니메이션을 재생합니다.
+    /// </summary>
+    /// <param name="peakMultiplier">최대 확대 배율 (기본값: 1.25배)</param>
+    /// <param name="duration">애니메이션 재생 시간 (기본값: 0.2초)</param>
+    public void PlayHighlightEffect(float peakMultiplier = 1.25f, float duration = 0.2f)
+    {
+        if (gameObject.activeInHierarchy)
+        {
+            if (highlightCoroutine != null)
+            {
+                StopCoroutine(highlightCoroutine);
+            }
+            highlightCoroutine = StartCoroutine(HighlightPopRoutine(peakMultiplier, duration));
+        }
+    }
+
+    /// <summary>
+    /// 타일이 순간적으로 확대되었다가 기본 크기로 부드럽게 복귀하는 팝 코루틴입니다.
+    /// </summary>
+    private IEnumerator HighlightPopRoutine(float peakMultiplier, float duration)
+    {
+        Vector3 startScale = transform.localScale;
+        Vector3 targetScale = baseScale * peakMultiplier;
+        float halfDuration = Mathf.Max(0.01f, duration * 0.5f);
+
+        // 1. 목표 배율까지 빠르게 확대
+        float elapsed = 0f;
+        while (elapsed < halfDuration)
+        {
+            if (this == null) yield break;
+            transform.localScale = Vector3.Lerp(startScale, targetScale, elapsed / halfDuration);
+            elapsed += Time.deltaTime;
+            yield return null;
+        }
+        transform.localScale = targetScale;
+
+        // 2. 기본 원래 크기로 부드럽게 복귀
+        elapsed = 0f;
+        while (elapsed < halfDuration)
+        {
+            if (this == null) yield break;
+            transform.localScale = Vector3.Lerp(targetScale, baseScale, elapsed / halfDuration);
+            elapsed += Time.deltaTime;
+            yield return null;
+        }
+        transform.localScale = baseScale;
+        highlightCoroutine = null;
     }
 }

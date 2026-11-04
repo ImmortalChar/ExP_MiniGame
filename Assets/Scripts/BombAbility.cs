@@ -25,12 +25,32 @@ public class BombAbility : MonoBehaviour
     [Tooltip("중심 칸으로 선택할 때 반드시 타일이 존재해야 하는지 여부 (기본값: true, false면 빈 칸도 중심점으로 선택 가능)")]
     [SerializeField] private bool requireTileOnCenter = true;
 
+    [Header("하이라이트 효과 설정")]
+    [Tooltip("폭탄 발동 시 타일이 확대되는 하이라이트 배율")]
+    [SerializeField] private float highlightScaleMultiplier = 1.25f;
+
+    [Tooltip("폭탄 발동 하이라이트 연출 지속 시간 (초)")]
+    [SerializeField] private float highlightDuration = 0.2f;
+
     [Header("UI 컴포넌트")]
     [Tooltip("남은 폭탄 횟수를 표시할 TextMeshPro UI (선택 사항)")]
     [SerializeField] private TextMeshProUGUI bombCountText;
 
     [Tooltip("Bomb 버튼 컴포넌트 (비어있으면 현재 오브젝트에서 자동 탐색)")]
     [SerializeField] private Button bombButton;
+
+    [Header("버튼 하이라이트 UI 설정")]
+    [Tooltip("어빌리티 활성화 시 버튼에 적용할 강조 색상 (기본값: 밝은 황금빛)")]
+    [SerializeField] private Color buttonActiveColor = new Color(1f, 0.88f, 0.35f, 1f);
+
+    [Tooltip("어빌리티 활성화 시 버튼 확대 배율 (기본값: 1.12배)")]
+    [SerializeField] private float buttonActiveScale = 1.12f;
+
+    [Tooltip("어빌리티 활성화 시 버튼이 부드럽게 숨쉬듯 펄스 애니메이션을 재생할지 여부")]
+    [SerializeField] private bool usePulseAnimation = true;
+
+    [Tooltip("어빌리티 활성화 시 외곽선(Outline) 강조를 표시할지 여부")]
+    [SerializeField] private bool useOutlineHighlight = true;
 
     [Header("보드 참조")]
     [Tooltip("TileBoard 컴포넌트 참조 (비어있으면 씬에서 자동 탐색)")]
@@ -40,6 +60,13 @@ public class BombAbility : MonoBehaviour
     private bool isBombMode = false;
 
     private bool isListenersRegistered = false;
+
+    private Vector3 originalButtonScale = Vector3.one;
+    private Color originalButtonColor = Color.white;
+    private ColorBlock originalColorBlock;
+    private Image buttonImage;
+    private Outline buttonOutline;
+    private Coroutine buttonPulseCoroutine;
 
     private void Awake()
     {
@@ -54,6 +81,8 @@ public class BombAbility : MonoBehaviour
         {
             bombButton = GetComponent<Button>();
         }
+
+        InitButtonHighlight();
     }
 
     private void Start()
@@ -186,6 +215,12 @@ public class BombAbility : MonoBehaviour
             erase.CancelEraseMode();
         }
 
+        RotateAbility rotate = FindFirstObjectByType<RotateAbility>();
+        if (rotate != null && rotate.IsRotateMode)
+        {
+            rotate.CancelRotateMode();
+        }
+
         // 리스너가 아직 등록되지 않았었다면 즉시 등록
         if (!isListenersRegistered)
         {
@@ -197,6 +232,7 @@ public class BombAbility : MonoBehaviour
 
         // 3. 폭탄 모드 활성화
         isBombMode = true;
+        SetButtonHighlight(true);
 
         // 타일 선택 도중 보드가 스와이프로 밀리지 않도록 보드 입력 잠시 비활성화
         if (board != null)
@@ -262,15 +298,27 @@ public class BombAbility : MonoBehaviour
 
     /// <summary>
     /// 선택된 셀을 중심으로 3x3 범위 안의 타일을 모두 삭제하고 점수를 합산하여 추가합니다.
+    /// 어빌리티 발동 타일 자체에 하이라이트 효과(확대 팝 연출)를 적용한 뒤 삭제합니다.
     /// </summary>
     /// <param name="centerCell">중심이 되는 셀</param>
     private void ExecuteBomb(TileCell centerCell)
     {
+        StartCoroutine(ExecuteBombRoutine(centerCell));
+    }
+
+    /// <summary>
+    /// 폭탄 어빌리티 발동 코루틴: 발동 타일 하이라이트 재생 후 타일 파괴 및 후속 처리를 진행합니다.
+    /// </summary>
+    private IEnumerator ExecuteBombRoutine(TileCell centerCell)
+    {
         if (board == null || board.Grid == null)
         {
             CancelBombMode();
-            return;
+            yield break;
         }
+
+        // 폭탄 실행 중 중복 입력 방지
+        isBombMode = false;
 
         // 1. 직전 상태 저장 (되돌리기 Undo 기능과의 연동)
         if (BoardHistoryManager.Instance != null)
@@ -308,11 +356,29 @@ public class BombAbility : MonoBehaviour
             }
         }
 
+        // [핵심] 어빌리티 발동 타일 자체에 하이라이트 팝 효과 적용!
+        foreach (Tile tile in tilesToDestroy)
+        {
+            if (tile != null)
+            {
+                tile.PlayHighlightEffect(highlightScaleMultiplier, highlightDuration);
+            }
+        }
+
+        // 하이라이트 연출이 보이도록 대기
+        if (tilesToDestroy.Count > 0)
+        {
+            yield return new WaitForSeconds(highlightDuration);
+        }
+
         // 수집된 타일들 파괴 및 보드에서 제거
         int destroyedCount = tilesToDestroy.Count;
         foreach (Tile tile in tilesToDestroy)
         {
-            board.DestroyTile(tile);
+            if (tile != null)
+            {
+                board.DestroyTile(tile);
+            }
         }
 
         // 3. 획득한 총 점수 적용
@@ -327,8 +393,8 @@ public class BombAbility : MonoBehaviour
 
         Debug.Log($"[BombAbility] 폭탄 폭발 완료! (중심: {centerCell.coordinates}) - 삭제된 타일: {destroyedCount}개, 획득 점수: +{totalScore}점. 남은 횟수: {bombCount}/{maxBombCount}");
 
-        // 5. 폭탄 모드 종료 및 보드 조작 재개
-        isBombMode = false;
+        // 5. 폭탄 모드 종료 및 버튼 하이라이트 해제
+        SetButtonHighlight(false);
 
         if (board != null)
         {
@@ -361,11 +427,121 @@ public class BombAbility : MonoBehaviour
     public void CancelBombMode()
     {
         isBombMode = false;
+        SetButtonHighlight(false);
 
         // 보드 조작 다시 활성화
         if (board != null)
         {
             board.enabled = true;
+        }
+    }
+
+    /// <summary>
+    /// 버튼 하이라이트 관련 원본 값 초기화 및 아웃라인 설정을 수행합니다.
+    /// </summary>
+    private void InitButtonHighlight()
+    {
+        if (bombButton != null)
+        {
+            originalButtonScale = bombButton.transform.localScale;
+            originalColorBlock = bombButton.colors;
+
+            buttonImage = bombButton.GetComponent<Image>();
+            if (buttonImage != null)
+            {
+                originalButtonColor = buttonImage.color;
+            }
+
+            if (useOutlineHighlight)
+            {
+                buttonOutline = bombButton.GetComponent<Outline>();
+                if (buttonOutline == null)
+                {
+                    buttonOutline = bombButton.gameObject.AddComponent<Outline>();
+                }
+                buttonOutline.effectColor = new Color(1f, 0.9f, 0.2f, 0.9f);
+                buttonOutline.effectDistance = new Vector2(3f, -3f);
+                buttonOutline.enabled = false;
+            }
+        }
+    }
+
+    /// <summary>
+    /// 폭탄 버튼의 활성화/비활성화 하이라이트 상태를 적용합니다.
+    /// </summary>
+    /// <param name="isActive">활성화 여부</param>
+    public void SetButtonHighlight(bool isActive)
+    {
+        if (bombButton == null) return;
+
+        if (buttonPulseCoroutine != null)
+        {
+            StopCoroutine(buttonPulseCoroutine);
+            buttonPulseCoroutine = null;
+        }
+
+        if (isActive)
+        {
+            if (usePulseAnimation && gameObject.activeInHierarchy)
+            {
+                buttonPulseCoroutine = StartCoroutine(ButtonPulseRoutine());
+            }
+            else
+            {
+                bombButton.transform.localScale = originalButtonScale * buttonActiveScale;
+            }
+
+            if (buttonImage != null)
+            {
+                buttonImage.color = buttonActiveColor;
+            }
+
+            ColorBlock cb = bombButton.colors;
+            cb.normalColor = buttonActiveColor;
+            cb.selectedColor = buttonActiveColor;
+            bombButton.colors = cb;
+
+            if (buttonOutline != null)
+            {
+                buttonOutline.enabled = true;
+            }
+        }
+        else
+        {
+            bombButton.transform.localScale = originalButtonScale;
+
+            if (buttonImage != null)
+            {
+                buttonImage.color = originalButtonColor;
+            }
+
+            bombButton.colors = originalColorBlock;
+
+            if (buttonOutline != null)
+            {
+                buttonOutline.enabled = false;
+            }
+        }
+    }
+
+    /// <summary>
+    /// 활성화 중일 때 버튼이 숨쉬듯 부드럽게 펄스(크기 변화)하는 코루틴입니다.
+    /// </summary>
+    private IEnumerator ButtonPulseRoutine()
+    {
+        float minScale = buttonActiveScale;
+        float maxScale = buttonActiveScale * 1.08f;
+        float speed = 4f;
+
+        while (true)
+        {
+            float t = (Mathf.Sin(Time.time * speed) + 1f) * 0.5f;
+            float currentScale = Mathf.Lerp(minScale, maxScale, t);
+            if (bombButton != null)
+            {
+                bombButton.transform.localScale = originalButtonScale * currentScale;
+            }
+            yield return null;
         }
     }
 

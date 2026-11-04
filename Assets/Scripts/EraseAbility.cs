@@ -26,12 +26,32 @@ public class EraseAbility : MonoBehaviour
     [Tooltip("true이면 선택한 방향의 해당 라인(행 또는 열) 전체를 삭제합니다.\nfalse이면 선택한 두 타일을 포함하여 그 사이에 있는 타일들만 삭제합니다. (기본값: false)")]
     [SerializeField] private bool clearEntireLine = false;
 
+    [Header("하이라이트 효과 설정")]
+    [Tooltip("지우기 발동 시 타일이 확대되는 하이라이트 배율")]
+    [SerializeField] private float highlightScaleMultiplier = 1.25f;
+
+    [Tooltip("지우기 발동 하이라이트 연출 지속 시간 (초)")]
+    [SerializeField] private float highlightDuration = 0.2f;
+
     [Header("UI 컴포넌트")]
     [Tooltip("남은 지우기 횟수를 표시할 TextMeshPro UI (선택 사항)")]
     [SerializeField] private TextMeshProUGUI eraseCountText;
 
     [Tooltip("Erase 버튼 컴포넌트 (비어있으면 현재 오브젝트에서 자동 탐색)")]
     [SerializeField] private Button eraseButton;
+
+    [Header("버튼 하이라이트 UI 설정")]
+    [Tooltip("어빌리티 활성화 시 버튼에 적용할 강조 색상 (기본값: 밝은 황금빛)")]
+    [SerializeField] private Color buttonActiveColor = new Color(1f, 0.88f, 0.35f, 1f);
+
+    [Tooltip("어빌리티 활성화 시 버튼 확대 배율 (기본값: 1.12배)")]
+    [SerializeField] private float buttonActiveScale = 1.12f;
+
+    [Tooltip("어빌리티 활성화 시 버튼이 부드럽게 숨쉬듯 펄스 애니메이션을 재생할지 여부")]
+    [SerializeField] private bool usePulseAnimation = true;
+
+    [Tooltip("어빌리티 활성화 시 외곽선(Outline) 강조를 표시할지 여부")]
+    [SerializeField] private bool useOutlineHighlight = true;
 
     [Header("보드 참조")]
     [Tooltip("TileBoard 컴포넌트 참조 (비어있으면 씬에서 자동 탐색)")]
@@ -41,10 +61,16 @@ public class EraseAbility : MonoBehaviour
     private bool isEraseMode = false;
 
     private TileCell firstSelectedCell = null;
-    private Vector3 originalFirstTileScale = Vector3.one;
     private Color originalCellColor = Color.white;
     private Image highlightedCellImage = null;
     private bool isListenersRegistered = false;
+
+    private Vector3 originalButtonScale = Vector3.one;
+    private Color originalButtonColor = Color.white;
+    private ColorBlock originalColorBlock;
+    private Image buttonImage;
+    private Outline buttonOutline;
+    private Coroutine buttonPulseCoroutine;
 
     private void Awake()
     {
@@ -59,6 +85,8 @@ public class EraseAbility : MonoBehaviour
         {
             eraseButton = GetComponent<Button>();
         }
+
+        InitButtonHighlight();
     }
 
     private void Start()
@@ -191,6 +219,12 @@ public class EraseAbility : MonoBehaviour
             bomb.CancelBombMode();
         }
 
+        RotateAbility rotate = FindFirstObjectByType<RotateAbility>();
+        if (rotate != null && rotate.IsRotateMode)
+        {
+            rotate.CancelRotateMode();
+        }
+
         // 리스너가 아직 등록되지 않았었다면 즉시 등록
         if (!isListenersRegistered)
         {
@@ -202,6 +236,7 @@ public class EraseAbility : MonoBehaviour
 
         // 3. 지우기 모드 활성화
         isEraseMode = true;
+        SetButtonHighlight(true);
         firstSelectedCell = null;
 
         // 타일 선택 도중 보드가 스와이프로 밀리지 않도록 보드 입력 잠시 비활성화
@@ -269,14 +304,27 @@ public class EraseAbility : MonoBehaviour
 
     /// <summary>
     /// 선택한 두 타일을 잇는 가로 또는 세로 라인의 타일을 모두 삭제하고 점수를 합산합니다.
+    /// 삭제 직전 어빌리티가 발동된 라인의 타일들 자체에 하이라이트 효과(확대 팝 연출)를 적용합니다.
     /// </summary>
     private void ExecuteErase(TileCell cellA, TileCell cellB)
+    {
+        StartCoroutine(ExecuteEraseRoutine(cellA, cellB));
+    }
+
+    /// <summary>
+    /// 지우기 어빌리티 발동 코루틴: 발동 라인 타일 하이라이트 재생 후 타일 파괴 및 후속 처리를 진행합니다.
+    /// </summary>
+    private IEnumerator ExecuteEraseRoutine(TileCell cellA, TileCell cellB)
     {
         if (board == null || board.Grid == null)
         {
             CancelEraseMode();
-            return;
+            yield break;
         }
+
+        // 지우기 실행 중 중복 터치 방지
+        firstSelectedCell = null;
+        isEraseMode = false;
 
         // 1. 직전 상태 저장 (되돌리기 Undo 기능과의 연동)
         if (BoardHistoryManager.Instance != null)
@@ -358,11 +406,29 @@ public class EraseAbility : MonoBehaviour
             }
         }
 
+        // [핵심] 어빌리티 발동 타일 자체에 하이라이트 팝 효과 적용!
+        foreach (Tile tile in tilesToDestroy)
+        {
+            if (tile != null)
+            {
+                tile.PlayHighlightEffect(highlightScaleMultiplier, highlightDuration);
+            }
+        }
+
+        // 하이라이트 연출이 보이도록 대기
+        if (tilesToDestroy.Count > 0)
+        {
+            yield return new WaitForSeconds(highlightDuration);
+        }
+
         // 타일 삭제 및 보드에서 제거
         int destroyedCount = tilesToDestroy.Count;
         foreach (Tile tile in tilesToDestroy)
         {
-            board.DestroyTile(tile);
+            if (tile != null)
+            {
+                board.DestroyTile(tile);
+            }
         }
 
         // 4. 획득한 총 점수 적용
@@ -378,9 +444,8 @@ public class EraseAbility : MonoBehaviour
         string lineDirection = isSameRow ? "가로" : "세로";
         Debug.Log($"[EraseAbility] {lineDirection}줄 지우기 완료! ({cellA.coordinates} ~ {cellB.coordinates}) - 삭제된 타일: {destroyedCount}개, 획득 점수: +{totalScore}점. 남은 횟수: {eraseCount}/{maxEraseCount}");
 
-        // 6. 지우기 모드 종료 및 보드 조작 재개
-        firstSelectedCell = null;
-        isEraseMode = false;
+        // 6. 지우기 모드 종료 및 버튼 하이라이트 해제
+        SetButtonHighlight(false);
 
         if (board != null)
         {
@@ -419,11 +484,121 @@ public class EraseAbility : MonoBehaviour
 
         firstSelectedCell = null;
         isEraseMode = false;
+        SetButtonHighlight(false);
 
         // 보드 조작 다시 활성화
         if (board != null)
         {
             board.enabled = true;
+        }
+    }
+
+    /// <summary>
+    /// 버튼 하이라이트 관련 원본 값 초기화 및 아웃라인 설정을 수행합니다.
+    /// </summary>
+    private void InitButtonHighlight()
+    {
+        if (eraseButton != null)
+        {
+            originalButtonScale = eraseButton.transform.localScale;
+            originalColorBlock = eraseButton.colors;
+
+            buttonImage = eraseButton.GetComponent<Image>();
+            if (buttonImage != null)
+            {
+                originalButtonColor = buttonImage.color;
+            }
+
+            if (useOutlineHighlight)
+            {
+                buttonOutline = eraseButton.GetComponent<Outline>();
+                if (buttonOutline == null)
+                {
+                    buttonOutline = eraseButton.gameObject.AddComponent<Outline>();
+                }
+                buttonOutline.effectColor = new Color(1f, 0.9f, 0.2f, 0.9f);
+                buttonOutline.effectDistance = new Vector2(3f, -3f);
+                buttonOutline.enabled = false;
+            }
+        }
+    }
+
+    /// <summary>
+    /// 지우기 버튼의 활성화/비활성화 하이라이트 상태를 적용합니다.
+    /// </summary>
+    /// <param name="isActive">활성화 여부</param>
+    public void SetButtonHighlight(bool isActive)
+    {
+        if (eraseButton == null) return;
+
+        if (buttonPulseCoroutine != null)
+        {
+            StopCoroutine(buttonPulseCoroutine);
+            buttonPulseCoroutine = null;
+        }
+
+        if (isActive)
+        {
+            if (usePulseAnimation && gameObject.activeInHierarchy)
+            {
+                buttonPulseCoroutine = StartCoroutine(ButtonPulseRoutine());
+            }
+            else
+            {
+                eraseButton.transform.localScale = originalButtonScale * buttonActiveScale;
+            }
+
+            if (buttonImage != null)
+            {
+                buttonImage.color = buttonActiveColor;
+            }
+
+            ColorBlock cb = eraseButton.colors;
+            cb.normalColor = buttonActiveColor;
+            cb.selectedColor = buttonActiveColor;
+            eraseButton.colors = cb;
+
+            if (buttonOutline != null)
+            {
+                buttonOutline.enabled = true;
+            }
+        }
+        else
+        {
+            eraseButton.transform.localScale = originalButtonScale;
+
+            if (buttonImage != null)
+            {
+                buttonImage.color = originalButtonColor;
+            }
+
+            eraseButton.colors = originalColorBlock;
+
+            if (buttonOutline != null)
+            {
+                buttonOutline.enabled = false;
+            }
+        }
+    }
+
+    /// <summary>
+    /// 활성화 중일 때 버튼이 숨쉬듯 부드럽게 펄스(크기 변화)하는 코루틴입니다.
+    /// </summary>
+    private IEnumerator ButtonPulseRoutine()
+    {
+        float minScale = buttonActiveScale;
+        float maxScale = buttonActiveScale * 1.08f;
+        float speed = 4f;
+
+        while (true)
+        {
+            float t = (Mathf.Sin(Time.time * speed) + 1f) * 0.5f;
+            float currentScale = Mathf.Lerp(minScale, maxScale, t);
+            if (eraseButton != null)
+            {
+                eraseButton.transform.localScale = originalButtonScale * currentScale;
+            }
+            yield return null;
         }
     }
 
@@ -438,15 +613,7 @@ public class EraseAbility : MonoBehaviour
         // 1. 해당 칸에 타일이 있는 경우 타일 확대/복원
         if (cell.tile != null)
         {
-            if (isHighlighted)
-            {
-                originalFirstTileScale = cell.tile.transform.localScale;
-                cell.tile.transform.localScale = originalFirstTileScale * 1.15f;
-            }
-            else
-            {
-                cell.tile.transform.localScale = originalFirstTileScale;
-            }
+            cell.tile.SetHighlight(isHighlighted, 1.15f);
         }
 
         // 2. 셀 이미지에 대한 시각적 피드백 (빈 칸 및 타일 칸 공통)
