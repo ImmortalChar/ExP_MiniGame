@@ -16,6 +16,14 @@ public class TileBoard : MonoBehaviour
     [Tooltip("숫자 2, 4, 8, 16... 순서대로 저장된 타일 상태(데이터) 배열")]
     [SerializeField] private TileState[] tileStates;
 
+    [Header("특수 타일 (타이머 보너스) 설정")]
+    [Tooltip("새로 생성되는 2 타일이 특수 타일로 생성될 확률 (0.2 = 20%)")]
+    [Range(0f, 1f)]
+    [SerializeField] private float specialTileProbability = 0.2f;
+
+    [Tooltip("특수 타일이 4로 합쳐질 때 추가할 보너스 시간 (초)")]
+    [SerializeField] private float bonusTimeAmount = 1f;
+
     [Header("모바일 터치 설정")]
     [Tooltip("스와이프로 인식할 최소 드래그 거리 (픽셀)")]
     [SerializeField] private float minSwipeDistance = 50f;
@@ -31,6 +39,11 @@ public class TileBoard : MonoBehaviour
     /// 그리드(격자)를 제어하는 TileGrid 컴포넌트 참조입니다.
     /// </summary>
     private TileGrid grid;
+
+    /// <summary>
+    /// 외부에서 그리드 정보를 조회할 수 있는 읽기 전용 프로퍼티입니다.
+    /// </summary>
+    public TileGrid Grid => grid;
 
     /// <summary>
     /// 현재 보드 위에 존재하는 모든 타일들을 담아두는 리스트입니다.
@@ -73,6 +86,7 @@ public class TileBoard : MonoBehaviour
 
     /// <summary>
     /// 보드의 빈 칸 중 한 곳에 새 타일(기본 숫자 2)을 생성합니다.
+    /// 설정된 확률(기본 20%)로 타이머를 1초 늘려주는 특수 2 타일로 생성됩니다.
     /// </summary>
     public void CreateTile()
     {
@@ -82,11 +96,64 @@ public class TileBoard : MonoBehaviour
         // 첫 번째 상태(일반적으로 숫자 2)를 적용합니다.
         tile.SetState(tileStates[0]);
 
+        // 지정된 확률(기본 20%)로 특수 2 타일(타이머 보너스)로 설정
+        if (Random.value < specialTileProbability)
+        {
+            tile.SetTimerBonus(true);
+        }
+
         // 그리드에서 무작위 빈 칸을 찾아 배치합니다.
         tile.Spawn(grid.GetRandomEmptyCell());
 
         // 생성된 타일을 관리 리스트에 추가합니다.
         tiles.Add(tile);
+    }
+
+    /// <summary>
+    /// 지정된 셀 위치에 특정 상태의 타일을 즉시 생성합니다. (이전 상태 복원 등에서 사용)
+    /// </summary>
+    /// <param name="cell">배치할 셀</param>
+    /// <param name="state">적용할 타일 상태</param>
+    /// <param name="isTimerBonus">특수 타일 여부</param>
+    public void CreateTile(TileCell cell, TileState state, bool isTimerBonus = false)
+    {
+        Tile tile = Instantiate(tilePrefab, grid.transform);
+        tile.SetState(state);
+        if (isTimerBonus)
+        {
+            tile.SetTimerBonus(true);
+        }
+        tile.Spawn(cell);
+        tiles.Add(tile);
+    }
+
+    /// <summary>
+    /// 지정된 타일을 보드 관리 리스트에서 제거하고 게임오브젝트를 파괴합니다.
+    /// 어빌리티(Bomb, Erase 등)에서 특정 타일을 삭제할 때 사용됩니다.
+    /// </summary>
+    /// <param name="tile">삭제할 타일</param>
+    public void DestroyTile(Tile tile)
+    {
+        if (tile == null) return;
+
+        if (tile.cell != null)
+        {
+            tile.cell.tile = null;
+        }
+
+        tiles.Remove(tile);
+        Destroy(tile.gameObject);
+    }
+
+    /// <summary>
+    /// 인덱스 번호로 타일 상태(TileState)를 반환합니다.
+    /// </summary>
+    public TileState GetTileState(int index)
+    {
+        if (index >= 0 && index < tileStates.Length) {
+            return tileStates[index];
+        }
+        return null;
     }
 
     /// <summary>
@@ -199,6 +266,11 @@ public class TileBoard : MonoBehaviour
     /// <param name="incrementY">세로 검사 증감값 (+1 또는 -1)</param>
     private void Move(Vector2Int direction, int startX, int incrementX, int startY, int incrementY)
     {
+        // 타일 이동을 시도하기 직전의 상태를 임시로 기록해 둡니다.
+        if (BoardHistoryManager.Instance != null) {
+            BoardHistoryManager.Instance.PrepareStateBeforeMove();
+        }
+
         bool changed = false; // 실제로 타일이 움직이거나 합쳐졌는지 여부
 
         // 이동 방향에 맞춘 순서로 그리드의 모든 칸을 2중 반복문으로 순회합니다.
@@ -218,7 +290,17 @@ public class TileBoard : MonoBehaviour
 
         // 최소 하나의 타일이라도 움직이거나 합쳐졌다면, 애니메이션 대기 및 후속 처리 코루틴을 실행합니다.
         if (changed) {
+            // 실제로 보드에 변화가 발생했으므로 직전 상태로 확정 저장합니다.
+            if (BoardHistoryManager.Instance != null) {
+                BoardHistoryManager.Instance.CommitPendingState();
+            }
+
             StartCoroutine(WaitForChanges());
+        } else {
+            // 타일이 전혀 움직이지 않았으므로 임시 백업을 취소합니다.
+            if (BoardHistoryManager.Instance != null) {
+                BoardHistoryManager.Instance.CancelPendingState();
+            }
         }
     }
 
@@ -285,6 +367,9 @@ public class TileBoard : MonoBehaviour
     /// <param name="b">남아서 숫자가 2배로 커질 타일</param>
     private void MergeTiles(Tile a, Tile b)
     {
+        // 합쳐지는 타일 중 하나라도 특수 2 타일인지 확인합니다.
+        bool hasBonus = a.isTimerBonus || b.isTimerBonus;
+
         // 1. 사라질 타일 a를 관리 리스트에서 제거하고 합체 애니메이션을 시작합니다.
         tiles.Remove(a);
         a.Merge(b.cell);
@@ -293,11 +378,24 @@ public class TileBoard : MonoBehaviour
         int index = Mathf.Clamp(IndexOf(b.state) + 1, 0, tileStates.Length - 1);
         TileState newState = tileStates[index];
 
-        // 3. 타일 b에 새로운 숫자와 색상을 적용합니다.
+        // 3. 타일 b의 특수 보너스 상태를 해제하고 새로운 숫자와 색상을 적용합니다. (4로 진화)
+        b.SetTimerBonus(false);
         b.SetState(newState);
 
         // 4. 합쳐져서 새로 만들어진 타일의 숫자만큼 점수를 올립니다.
         GameManager.Instance.IncreaseScore(newState.number);
+
+        // 5. 특수 2 타일이 4로 합쳐졌다면 타이머에 보너스 시간(1초)을 추가합니다.
+        if (hasBonus && Timer.Instance != null)
+        {
+            Timer.Instance.AddTime(bonusTimeAmount);
+        }
+
+        // 6. 타일 결합 효과음(키보드 사운드 중 1개)을 1회 재생합니다.
+        if (AudioManager.Instance != null)
+        {
+            AudioManager.Instance.PlayRandomKeyboardSFX();
+        }
     }
 
     /// <summary>
@@ -305,7 +403,7 @@ public class TileBoard : MonoBehaviour
     /// </summary>
     /// <param name="state">찾고자 하는 타일 상태 데이터</param>
     /// <returns>배열의 인덱스 번호 (없으면 -1)</returns>
-    private int IndexOf(TileState state)
+    public int IndexOf(TileState state)
     {
         for (int i = 0; i < tileStates.Length; i++)
         {
@@ -331,7 +429,7 @@ public class TileBoard : MonoBehaviour
 
         // 모든 타일의 합체 잠금(locked) 플래그를 해제하여 다음 턴에 다시 합쳐질 수 있도록 합니다.
         foreach (var tile in tiles) {
-            tile.locked = false;
+            if (tile != null) tile.locked = false;
         }
 
         // 보드에 빈 칸이 남아있다면 새 타일 하나를 생성합니다.
@@ -360,6 +458,7 @@ public class TileBoard : MonoBehaviour
         // 모든 칸이 찬 경우, 각 타일마다 상하좌우에 자신과 숫자가 같은(합칠 수 있는) 타일이 있는지 전수 조사합니다.
         foreach (var tile in tiles)
         {
+            if (tile == null) continue;
             TileCell up = grid.GetAdjacentCell(tile.cell, Vector2Int.up);
             TileCell down = grid.GetAdjacentCell(tile.cell, Vector2Int.down);
             TileCell left = grid.GetAdjacentCell(tile.cell, Vector2Int.left);
